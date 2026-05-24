@@ -1,0 +1,82 @@
+name: Payload
+
+on:
+  push:
+    paths-ignore:
+      - "**/*.md"
+      - "**/*.txt"
+      - "!**/CMakeLists.txt"
+      - ".gitignore"
+      - ".idea/**"
+      - ".vscode/**"
+  pull_request:
+    paths-ignore:
+      - "**/*.md"
+      - "**/*.txt"
+      - "!**/CMakeLists.txt"
+      - ".gitignore"
+      - ".idea/**"
+      - ".vscode/**"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.ref }}-${{ github.event_name  }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+
+    - name: Tell tools version
+      run: |
+        clang -v
+        cmake --version
+        echo cwd="${PWD##*/}" >> ${{ github.env }}
+
+    - name: Set environment variables
+      run: echo "PS5_PAYLOAD_SDK=${{ runner.tool_cache }}/opt/ps5-payload-sdk" >> ${{ github.env }}
+
+    - name: Install PS5 SDK
+      run: |
+        p="${{ env.PS5_PAYLOAD_SDK }}"
+        mkdir -p "$p"
+        curl -sL https://github.com/ps5-payload-dev/pacbrew-repo/releases/latest/download/ps5-payload-dev.tar.gz | tar xz -C "$(realpath "$p/../../")"
+        ls $p
+
+    - name: Checkout Update PS5 SDK
+      uses: actions/checkout@main
+      with:
+        repository: ps5-payload-dev/sdk
+
+    - name: Install update PS5 SDK
+      run: make "DESTDIR=${{ env.PS5_PAYLOAD_SDK }}" clean install -j "$(nproc)"
+
+    - name: Checkout Payload
+      uses: actions/checkout@main
+
+    - name: Build PS5 Payloads
+      run: |
+        p="$PWD" # define p so it can be copypasted into shell
+        b="$p/build_ps5"
+        $PS5_PAYLOAD_SDK/bin/prospero-cmake -B "$b" -DCMAKE_VERBOSE_MAKEFILE=OFF --fresh
+        $PS5_PAYLOAD_SDK/bin/prospero-cmake --build "$b" -j "$(nproc)"
+
+    - name: Upload ${{ env.cwd }}
+      if: 0
+      uses: actions/upload-artifact@main
+      with:
+        name: ${{ env.cwd }}
+        path: build_ps5/${{ env.cwd }}.elf
+        archive: false
+        retention-days: 1
+
+    - name: Upload release
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        gh release create "${{ github.run_id }}" \
+        build_ps5/${{ env.cwd }}.elf \
+        --target "${{ GITHUB.SHA }}" -t "${{ github.run_id }}" -p
